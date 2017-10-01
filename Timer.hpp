@@ -16,6 +16,7 @@
 #include <functional>
 #include <iostream>
 #include <thread>
+#include <atomic>
 #include <vector>
 #include <chrono>
 
@@ -207,6 +208,8 @@ private:
  */
 class PeriodicAlarm {
 public:
+   PeriodicAlarm();
+   ~PeriodicAlarm();
 
    //! program the alarm (see Alarm::program for details)
    template<class _Callable, class... _Args>
@@ -217,6 +220,7 @@ public:
 
 private:
    Alarm alarm;
+   std::atomic<bool> finished;
 };
 
 /* -------------------------------------------------------------------------------------- */
@@ -321,15 +325,20 @@ inline void Alarm::cancel()      { if(busy()) background.detach(); }
 inline bool Alarm::busy() const  { return background.joinable(); }
 
 /////////////////////////////////////// PERIODIC ALARM /////////////////////////////////////
+inline PeriodicAlarm::PeriodicAlarm() : finished(false) { }
+inline PeriodicAlarm::~PeriodicAlarm() { cancel(); }
+
 template<class _Callable, class... _Args> inline void PeriodicAlarm::program(time_t interval, const _Callable& func, _Args... args) {
     std::function<void(_Args...)> event = func;
     alarm.program(interval, [=] () {
-        event(args...);
-        this->cancel();
-        this->program(interval, event, args...);
+        if(!this->finished) {
+            event(args...);
+            this->alarm.cancel();
+            this->program(interval, event, args...);
+        }
     });
 }
-inline void PeriodicAlarm::cancel() { alarm.cancel(); }
+inline void PeriodicAlarm::cancel() { finished = true; alarm.cancel(); }
 
 
 /* -------------------------------------------------------------------------------------- */
