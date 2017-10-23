@@ -2,7 +2,7 @@
  * Timer.hpp
  * date:             02/15/2017
  * author:           Douglas Oliveira
- * last update:      10/01/2017
+ * last update:      10/23/2017
  * language version: C++11
  *
  * This header-only library contains some types of timers and alarms. It is very simple to use and it is useful
@@ -13,12 +13,14 @@
 #ifndef __TIMER_HPP__
 #define __TIMER_HPP__
 
-#include <functional>
+#include <chrono>
+
 #include <iostream>
+#include <sstream>
 #include <thread>
 #include <atomic>
 #include <vector>
-#include <chrono>
+#include <cmath>
 
 /* -------------------------------------------------------------------------------------- */
 /* ------------------------------------- Classes List ----------------------------------- */
@@ -38,8 +40,6 @@ template <class _Period> class StatisticalTimer;
 class Clock;
 //! Programs a function call to sometime in future
 class Alarm;
-//! Programs a function call that repeats every time interval
-class PeriodicAlarm;
 
 
 /////////////////////////////// internal use ///////////////////////////////
@@ -181,46 +181,31 @@ struct Clock {
  */
 class Alarm {
 public:
+   Alarm();
    ~Alarm();
 
    /** Program the alarm
     * @param wait   time to wait in milliseconds
-    * @param rotine callable object that returns \b void (procedure, functor, lambda expression, bind expression etc)
-    * @param args   arguments of the rotine
-    * Ex: Lambda-expression: @code Alarm().program(2000, [] (int a, int b) { print(a+b); }, 4, 7); @endcode
+    * @param event  callable object that returns \b void (procedure, functor, lambda expression, bind expression etc)
+    * @param args   arguments of the event
+    * Ex: Lambda-expression: @code Alarm().timeout(2000, [] (int a, int b) { print(a+b); }, 4, 7); @endcode
     */
    template <class _Callable, class... _Args>
-   void program(time_t wait, const _Callable& rotine, _Args... args);
+   void timeout(time_t wait, const _Callable& event, _Args... args);
+   //! Similar to @timeout but the event is called until the alarm is canceled
+   template <class _Callable, class... _Args>
+   void repeat(time_t interval, const _Callable& event, _Args... args);
 
    //! cancel the currently alarm
    void cancel();
-
    //! checks the alarm is busy
    bool busy() const;
 
+   static void sleep(time_t msec);
+
 private:
+   std::atomic<bool> finish;
    std::thread background;
-};
-
-/**
- * @class Periodic Alarm
- * @brief Automatically reprogramming the alarm when it is finished
- */
-class PeriodicAlarm {
-public:
-   PeriodicAlarm();
-   ~PeriodicAlarm();
-
-   //! program the alarm (see Alarm::program for details)
-   template<class _Callable, class... _Args>
-   void program(time_t interval, const _Callable& rotine, _Args... args);
-
-   //! cancel the alarm
-   void cancel();
-
-private:
-   Alarm alarm;
-   std::atomic<bool> finished;
 };
 
 /* -------------------------------------------------------------------------------------- */
@@ -310,36 +295,41 @@ inline std::ostream& operator << (std::ostream& out, const Clock& clock) {
 
 
 //////////////////////////////////////////// ALARM //////////////////////////////////////////
+inline Alarm::Alarm() : finish(false) {}
 inline Alarm::~Alarm() { cancel(); }
 
-template <class _Callable, class... _Args> inline void Alarm::program(time_t wait, const _Callable& func, _Args... args) {
+template <class _Callable, class... _Args> inline void Alarm::timeout(time_t wait, const _Callable& func, _Args... args) {
    if(!busy()) {
       std::function<void(_Args...)> event = func;
       background = std::thread([=] () {
-         std::this_thread::sleep_for(std::chrono::milliseconds(wait));
-         event(args...);
+         if(wait > 0) Alarm::sleep(wait);
+         if(!finish)  event(args...);
       });
    }
 }
-inline void Alarm::cancel()      { if(busy()) background.detach(); }
-inline bool Alarm::busy() const  { return background.joinable(); }
-
-/////////////////////////////////////// PERIODIC ALARM /////////////////////////////////////
-inline PeriodicAlarm::PeriodicAlarm() : finished(false) { }
-inline PeriodicAlarm::~PeriodicAlarm() { cancel(); }
-
-template<class _Callable, class... _Args> inline void PeriodicAlarm::program(time_t interval, const _Callable& func, _Args... args) {
-    std::function<void(_Args...)> event = func;
-    alarm.program(interval, [=] () {
-        if(!this->finished) {
-            event(args...);
-            this->alarm.cancel();
-            this->program(interval, event, args...);
-        }
-    });
+template <class _Callable, class... _Args> inline void Alarm::repeat(time_t wait, const _Callable& func, _Args... args) {
+   if(!busy()) {
+      std::function<void(_Args...)> event = func;
+      background = std::thread([=] () {
+         while(!finish) {
+            Alarm::sleep(wait);
+            if(!finish) event(args...);
+         }
+      });
+   }
 }
-inline void PeriodicAlarm::cancel() { finished = true; alarm.cancel(); }
 
+inline void Alarm::cancel() {
+   finish = true;
+   if(busy()) background.join();
+}
+inline bool Alarm::busy() const {
+   return background.joinable();
+}
+
+inline void Alarm::sleep(time_t msec) {
+   if(msec > 0) std::this_thread::sleep_for(std::chrono::milliseconds(msec));
+}
 
 /* -------------------------------------------------------------------------------------- */
 /* --------------------------------------- Statics -------------------------------------- */
